@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.HashSet;
 
 public class ChallengeSolver {
     private final long MAX_RUNTIME = 600000; // milliseconds; 10 minutes
@@ -25,10 +26,26 @@ public class ChallengeSolver {
         this.waveSizeLB = waveSizeLB;
         this.waveSizeUB = waveSizeUB;
     }
-
+        
     public ChallengeSolution solve(StopWatch stopWatch) {
-        // Implement your solution here
-        return null;
+        // Exemplo de solução simples
+        Set<Integer> selectedOrders = new HashSet<>();
+        Set<Integer> visitedAisles = new HashSet<>();
+
+        // Passo 1: Escolher pedidos até atingir o mínimo waveSizeLB
+        int totalUnits = 0;
+        for (int i = 0; i < orders.size(); i++) {
+            selectedOrders.add(i);
+            totalUnits += orders.get(i).values().stream().mapToInt(Integer::intValue).sum();
+            if (totalUnits >= waveSizeLB) break; // Paramos assim que atingimos o mínimo necessário
+        }
+
+        // Passo 2: Escolher corredores que tenham ao menos um item necessário
+        for (int j = 0; j < aisles.size(); j++) {
+            visitedAisles.add(j);
+        }
+
+        return new ChallengeSolution(selectedOrders, visitedAisles);
     }
 
     /*
