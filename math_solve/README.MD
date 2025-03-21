@@ -44,8 +44,6 @@ O objetivo do problema é maximizar uma razão (unidades por corredor), o que ca
 - **Testar diferentes valores de \( k \)**, variando de 1 até o número total de corredores (\( |A| \));
 - **Calcular a razão para cada \( k \)** e selecionar o valor de \( k \) que maximiza a produtividade.
 
-Essa abordagem transforma o problema original em uma série de problemas MILP lineares, que podem ser resolvidos eficientemente por solvers como Gurobi ou CBC.
-
 ---
 
 ## 3. Formulação Matemática
@@ -115,5 +113,3 @@ A modelagem matemática descrita foi implementada em código, seguindo estas eta
 - **Linearização**: A transformação do problema não-linear em uma série de problemas lineares permite o uso de solvers MILP robustos, garantindo soluções ótimas para cada \( k \).
 - **Escalabilidade**: Para instâncias com muitos corredores, testar todos os \( k \) pode ser custoso. Nesse caso, heurísticas ou limites práticos para \( k \) poderiam ser explorados.
 - **Flexibilidade**: A modelagem é genérica e pode ser adaptada para diferentes solvers ou formatos de entrada, mantendo a lógica matemática intacta.
-
-Essa abordagem garante que a solução atenda às restrições do problema e maximize a produtividade da coleta de pedidos de forma rigorosa e eficiente.
