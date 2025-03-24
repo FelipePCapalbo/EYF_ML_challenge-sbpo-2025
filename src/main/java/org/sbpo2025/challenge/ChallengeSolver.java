@@ -18,33 +18,62 @@ public class ChallengeSolver {
     protected int waveSizeLB;
     protected int waveSizeUB;
 
-    public ChallengeSolver(
-            List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles, int nItems, int waveSizeLB, int waveSizeUB) {
-        this.orders = orders;
-        this.aisles = aisles;
-        this.nItems = nItems;
-        this.waveSizeLB = waveSizeLB;
-        this.waveSizeUB = waveSizeUB;
-    }
-        
     public ChallengeSolution solve(StopWatch stopWatch) {
-        // Exemplo de solução simples
+        // --- Algoritmo Greedy para seleção de pedidos (wave) e corredores (aisles) ---
+
+        // Passo 1: Calcular a quantidade total de unidades de cada pedido
+        // e montar uma lista (pedido, quantidadeTotal).
+        List<int[]> ordersInfo = new ArrayList<>();
+        for (int orderIndex = 0; orderIndex < orders.size(); orderIndex++) {
+            int totalUnitsOrder = orders.get(orderIndex)
+                                        .values()
+                                        .stream()
+                                        .mapToInt(Integer::intValue)
+                                        .sum();
+            ordersInfo.add(new int[]{orderIndex, totalUnitsOrder});
+        }
+
+        // Passo 2: Ordenar os pedidos em ordem decrescente de totalUnitsOrder
+        // (tentamos primeiro pegar os "maiores" pedidos em termos de unidades).
+        ordersInfo.sort((a, b) -> Integer.compare(b[1], a[1]));
+
+        // Conjuntos que vão compor a solução
         Set<Integer> selectedOrders = new HashSet<>();
         Set<Integer> visitedAisles = new HashSet<>();
 
-        // Passo 1: Escolher pedidos até atingir o mínimo waveSizeLB
-        int totalUnits = 0;
-        for (int i = 0; i < orders.size(); i++) {
-            selectedOrders.add(i);
-            totalUnits += orders.get(i).values().stream().mapToInt(Integer::intValue).sum();
-            if (totalUnits >= waveSizeLB) break; // Paramos assim que atingimos o mínimo necessário
+        // Passo 3: Selecionar pedidos de forma greedy respeitando os limites LB e UB
+        int currentUnits = 0;
+        for (int[] info : ordersInfo) {
+            int candidateOrderIndex = info[0];
+            int candidateOrderUnits = info[1];
+
+            // Se ao incluir este pedido excederíamos o UB, não incluímos
+            if (currentUnits + candidateOrderUnits > waveSizeUB) {
+                continue;
+            }
+
+            // Caso contrário, podemos incluir esse pedido na wave
+            selectedOrders.add(candidateOrderIndex);
+            currentUnits += candidateOrderUnits;
+
+            // Se já atingimos ou passamos do LB, podemos parar
+            if (currentUnits >= waveSizeLB) {
+                break;
+            }
         }
 
-        // Passo 2: Escolher corredores que tenham ao menos um item necessário
-        for (int j = 0; j < aisles.size(); j++) {
-            visitedAisles.add(j);
+        // Verificação rápida: se não conseguimos atingir o LB, pegamos de todo modo
+        // o que selecionamos, mas a solução pode acabar inviável se currentUnits < LB.
+        // (a verificação final de viabilidade já é feita em isSolutionFeasible()).
+
+        // Passo 4: Para garantir a viabilidade de forma simples, selecionamos "todos" corredores.
+        // (Uma heurística mais elaborada poderia tentar escolher menos corredores;
+        //  aqui fazemos o mais simples: usar todos e garantir suprimento.)
+        for (int aisleIndex = 0; aisleIndex < aisles.size(); aisleIndex++) {
+            visitedAisles.add(aisleIndex);
         }
 
+        // Retornamos a solução com o conjunto de pedidos e corredores
         return new ChallengeSolution(selectedOrders, visitedAisles);
     }
 
