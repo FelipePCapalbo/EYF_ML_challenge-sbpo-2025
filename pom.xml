@@ -14,24 +14,26 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
-    <!--    Run, once, before using CPLEX:-->
-    <!--    mvn install:install-file -Dfile=/Applications/CPLEX_Studio2211//cplex/lib/cplex.jar -DgroupId=cplex -DartifactId=cplex -Dversion=22.11 -Dpackaging=jar-->
+    <!-- Run, once, before using CPLEX: -->
+    <!-- mvn install:install-file -Dfile=/Applications/CPLEX_Studio2211/cplex/lib/cplex.jar -DgroupId=cplex -DartifactId=cplex -Dversion=22.11 -Dpackaging=jar -->
 
     <dependencies>
-        <!--        Uncomment the following lines to use CPLEX:-->
-<!--        <dependency>-->
-<!--            <groupId>cplex</groupId>-->
-<!--            <artifactId>cplex</artifactId>-->
-<!--            <version>22.11</version>-->
-<!--            <scope>compile</scope>-->
-<!--        </dependency>-->
-        <!--        Uncomment the following lines to use OR-Tools:-->
-<!--        <dependency>-->
-<!--            <groupId>com.google.ortools</groupId>-->
-<!--            <artifactId>ortools-java</artifactId>-->
-<!--            <version>9.11.4210</version>-->
-<!--            <scope>compile</scope>-->
-<!--        </dependency>-->
+        <!-- Dependência do CPLEX configurada -->
+        <dependency>
+            <groupId>cplex</groupId>
+            <artifactId>cplex</artifactId>
+            <version>22.11</version>
+            <scope>compile</scope>
+        </dependency>
+        <!-- Dependência do OR-Tools comentada, caso não seja usada -->
+        <!--
+        <dependency>
+            <groupId>com.google.ortools</groupId>
+            <artifactId>ortools-java</artifactId>
+            <version>9.11.4210</version>
+            <scope>compile</scope>
+        </dependency>
+        -->
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
