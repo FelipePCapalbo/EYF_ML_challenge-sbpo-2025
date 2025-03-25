@@ -2,12 +2,8 @@ package org.sbpo2025.challenge;
 
 import org.apache.commons.lang3.time.StopWatch;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.HashSet;
 
 public class ChallengeSolver {
     private final long MAX_RUNTIME = 600000; // milliseconds; 10 minutes
@@ -17,64 +13,162 @@ public class ChallengeSolver {
     protected int nItems;
     protected int waveSizeLB;
     protected int waveSizeUB;
+    private int[][] orderQuantities;
+    private int[][] aisleQuantities;
+    private int[] orderTotalItems;
 
+    public ChallengeSolver(
+            List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles, int nItems, int waveSizeLB, int waveSizeUB) {
+        this.orders = orders;
+        this.aisles = aisles;
+        this.nItems = nItems;
+        this.waveSizeLB = waveSizeLB;
+        this.waveSizeUB = waveSizeUB;
+        initializeQuantities();
+    }
+
+    /** Inicializa as estruturas de dados para acesso eficiente */
+    private void initializeQuantities() {
+        orderQuantities = new int[orders.size()][nItems];
+        for (int o = 0; o < orders.size(); o++) {
+            for (Map.Entry<Integer, Integer> entry : orders.get(o).entrySet()) {
+                int i = entry.getKey();
+                int qty = entry.getValue();
+                orderQuantities[o][i] = qty;
+            }
+        }
+        aisleQuantities = new int[aisles.size()][nItems];
+        for (int a = 0; a < aisles.size(); a++) {
+            for (Map.Entry<Integer, Integer> entry : aisles.get(a).entrySet()) {
+                int i = entry.getKey();
+                int qty = entry.getValue();
+                aisleQuantities[a][i] = qty;
+            }
+        }
+        orderTotalItems = new int[orders.size()];
+        for (int o = 0; o < orders.size(); o++) {
+            for (int i = 0; i < nItems; i++) {
+                orderTotalItems[o] += orderQuantities[o][i];
+            }
+        }
+    }
+
+    /** Heurística gulosa para resolver o problema */
     public ChallengeSolution solve(StopWatch stopWatch) {
-        // --- Algoritmo Greedy para seleção de pedidos (wave) e corredores (aisles) ---
+        Set<Integer> O = new HashSet<>(); // Conjunto de pedidos selecionados
+        Set<Integer> A = new HashSet<>(); // Conjunto de corredores selecionados
+        int[] currentRequirement = new int[nItems]; // Requisitos atuais por item
+        int totalItems = 0; // Total de itens coletados
+        int[] available = new int[nItems]; // Quantidades disponíveis nos corredores selecionados
 
-        // Passo 1: Calcular a quantidade total de unidades de cada pedido
-        // e montar uma lista (pedido, quantidadeTotal).
-        List<int[]> ordersInfo = new ArrayList<>();
-        for (int orderIndex = 0; orderIndex < orders.size(); orderIndex++) {
-            int totalUnitsOrder = orders.get(orderIndex)
-                                        .values()
-                                        .stream()
-                                        .mapToInt(Integer::intValue)
-                                        .sum();
-            ordersInfo.add(new int[]{orderIndex, totalUnitsOrder});
-        }
-
-        // Passo 2: Ordenar os pedidos em ordem decrescente de totalUnitsOrder
-        // (tentamos primeiro pegar os "maiores" pedidos em termos de unidades).
-        ordersInfo.sort((a, b) -> Integer.compare(b[1], a[1]));
-
-        // Conjuntos que vão compor a solução
-        Set<Integer> selectedOrders = new HashSet<>();
-        Set<Integer> visitedAisles = new HashSet<>();
-
-        // Passo 3: Selecionar pedidos de forma greedy respeitando os limites LB e UB
-        int currentUnits = 0;
-        for (int[] info : ordersInfo) {
-            int candidateOrderIndex = info[0];
-            int candidateOrderUnits = info[1];
-
-            // Se ao incluir este pedido excederíamos o UB, não incluímos
-            if (currentUnits + candidateOrderUnits > waveSizeUB) {
-                continue;
+        while (totalItems < waveSizeLB && getRemainingTime(stopWatch) > 0) {
+            // Encontrar pedidos candidatos que não excedam UB
+            List<Integer> candidates = new ArrayList<>();
+            for (int o = 0; o < orders.size(); o++) {
+                if (!O.contains(o) && totalItems + orderTotalItems[o] <= waveSizeUB) {
+                    candidates.add(o);
+                }
+            }
+            if (candidates.isEmpty()) {
+                break; // Não há mais pedidos viáveis
             }
 
-            // Caso contrário, podemos incluir esse pedido na wave
-            selectedOrders.add(candidateOrderIndex);
-            currentUnits += candidateOrderUnits;
+            // Encontrar pedidos que podem ser adicionados sem novos corredores
+            List<Integer> noNewAisles = new ArrayList<>();
+            for (int o : candidates) {
+                boolean canAdd = true;
+                for (int i = 0; i < nItems; i++) {
+                    if (currentRequirement[i] + orderQuantities[o][i] > available[i]) {
+                        canAdd = false;
+                        break;
+                    }
+                }
+                if (canAdd) {
+                    noNewAisles.add(o);
+                }
+            }
 
-            // Se já atingimos ou passamos do LB, podemos parar
-            if (currentUnits >= waveSizeLB) {
-                break;
+            if (!noNewAisles.isEmpty()) {
+                // Selecionar o pedido com maior número de itens
+                int bestO = noNewAisles.stream()
+                        .max(Comparator.comparingInt(o -> orderTotalItems[o]))
+                        .get();
+                O.add(bestO);
+                for (int i = 0; i < nItems; i++) {
+                    currentRequirement[i] += orderQuantities[bestO][i];
+                }
+                totalItems += orderTotalItems[bestO];
+            } else {
+                // Selecionar o pedido com melhor razão itens/requisitos adicionais
+                double bestRatio = -1;
+                int bestO = -1;
+                for (int o : candidates) {
+                    int sumRemainingReq = 0;
+                    for (int i = 0; i < nItems; i++) {
+                        sumRemainingReq += Math.max(0, currentRequirement[i] + orderQuantities[o][i] - available[i]);
+                    }
+                    double ratio = (double) orderTotalItems[o] / (sumRemainingReq + 1);
+                    if (ratio > bestRatio) {
+                        bestRatio = ratio;
+                        bestO = o;
+                    }
+                }
+                if (bestO == -1) {
+                    break; // Nenhum pedido pode ser adicionado
+                }
+
+                // Adicionar o pedido selecionado
+                O.add(bestO);
+                for (int i = 0; i < nItems; i++) {
+                    currentRequirement[i] += orderQuantities[bestO][i];
+                }
+                totalItems += orderTotalItems[bestO];
+
+                // Selecionar corredores adicionais necessários
+                int[] remainingReq = new int[nItems];
+                for (int i = 0; i < nItems; i++) {
+                    remainingReq[i] = Math.max(0, currentRequirement[i] - available[i]);
+                }
+                Set<Integer> additionalAisles = greedyAisleSelection(remainingReq);
+                for (int a : additionalAisles) {
+                    A.add(a);
+                    for (int i = 0; i < nItems; i++) {
+                        available[i] += aisleQuantities[a][i];
+                    }
+                }
             }
         }
 
-        // Verificação rápida: se não conseguimos atingir o LB, pegamos de todo modo
-        // o que selecionamos, mas a solução pode acabar inviável se currentUnits < LB.
-        // (a verificação final de viabilidade já é feita em isSolutionFeasible()).
+        return new ChallengeSolution(O, A);
+    }
 
-        // Passo 4: Para garantir a viabilidade de forma simples, selecionamos "todos" corredores.
-        // (Uma heurística mais elaborada poderia tentar escolher menos corredores;
-        //  aqui fazemos o mais simples: usar todos e garantir suprimento.)
-        for (int aisleIndex = 0; aisleIndex < aisles.size(); aisleIndex++) {
-            visitedAisles.add(aisleIndex);
+    /** Seleção gulosa de corredores para atender aos requisitos restantes */
+    private Set<Integer> greedyAisleSelection(int[] required) {
+        Set<Integer> selected = new HashSet<>();
+        int[] remaining = required.clone();
+        while (true) {
+            int bestA = -1;
+            int bestScore = 0;
+            for (int a = 0; a < aisles.size(); a++) {
+                if (selected.contains(a)) continue;
+                int score = 0;
+                for (int i = 0; i < nItems; i++) {
+                    if (remaining[i] > 0) {
+                        score += Math.min(remaining[i], aisleQuantities[a][i]);
+                    }
+                }
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestA = a;
+                }
+            }
+            if (bestScore == 0) break; // Nenhum corredor adicional ajuda
+            selected.add(bestA);
+            for (int i = 0; i < nItems; i++) {
+                remaining[i] = Math.max(0, remaining[i] - aisleQuantities[bestA][i]);
+            }
         }
-
-        // Retornamos a solução com o conjunto de pedidos e corredores
-        return new ChallengeSolution(selectedOrders, visitedAisles);
+        return selected;
     }
 
     /*
