@@ -14,7 +14,7 @@ public class ChallengeSolver {
 
     // Tempo máximo (em milissegundos) para o algoritmo (default 10 minutos = 600_000ms).
     // Você pode alterar ou ler esse valor de outro lugar, se preferir.
-    private final long MAX_RUNTIME = 600_0;
+    private final long MAX_RUNTIME = 60_000;
 
     // Quantas vezes tentaremos gerar soluções em paralelo a cada vez (ajuste se desejar).
     // Cada thread fará iterações de GRASP até o tempo expirar, compartilhando o "melhor global".
