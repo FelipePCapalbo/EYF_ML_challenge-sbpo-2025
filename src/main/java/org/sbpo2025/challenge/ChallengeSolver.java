@@ -6,7 +6,7 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 public class ChallengeSolver {
-    private final long MAX_RUNTIME = 100000; // milliseconds; 10 minutes
+    private final long MAX_RUNTIME = 10000; // milliseconds; 10 minutes
 
     protected List<Map<Integer, Integer>> orders;
     protected List<Map<Integer, Integer>> aisles;
