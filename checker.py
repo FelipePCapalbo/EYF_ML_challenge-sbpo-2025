@@ -90,17 +90,23 @@ def check_all_files(input_dir="datasets/a", output_dir="output"):
             
             print(f"\nVerificando par: {input_file} e {matching_output}")
             
-            # Ler entrada e saída
-            wave_order_picking.read_input(input_path)
-            selected_orders, visited_aisles = wave_order_picking.read_output(output_path)
-            
-            # Verificar factibilidade e objetivo
-            is_feasible = wave_order_picking.is_solution_feasible(selected_orders, visited_aisles)
-            objective_value = wave_order_picking.compute_objective_function(selected_orders, visited_aisles)
-            
-            print(f"É factível: {is_feasible}")
-            if is_feasible:
-                print(f"Valor da função objetivo: {objective_value:.2f}")
+            try:
+                # Ler entrada e saída
+                wave_order_picking.read_input(input_path)
+                selected_orders, visited_aisles = wave_order_picking.read_output(output_path)
+                
+                # Verificar factibilidade e objetivo
+                is_feasible = wave_order_picking.is_solution_feasible(selected_orders, visited_aisles)
+                print(f"É factível: {is_feasible}")
+                
+                if is_feasible:
+                    objective_value = wave_order_picking.compute_objective_function(selected_orders, visited_aisles)
+                    print(f"Valor da função objetivo: {objective_value:.2f}")
+                    
+            except ZeroDivisionError:
+                print("Erro: Divisão por zero - Nenhum corredor visitado na solução.")
+            except Exception as e:
+                print(f"Erro ao processar o par: {str(e)}")
         else:
             print(f"\nAviso: Nenhum arquivo de saída correspondente encontrado para {input_file}")
 
