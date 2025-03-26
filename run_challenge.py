@@ -2,6 +2,8 @@ import os
 import subprocess
 import sys
 import platform
+import signal
+from subprocess import Popen, PIPE
 
 # Paths to the libraries
 CPLEX_PATH = "$HOME/CPLEX_Studio2211/opl/bin/arm64_osx/"
@@ -10,15 +12,18 @@ OR_TOOLS_PATH = "$HOME/Documents/or-tools/build/lib/"
 USE_CPLEX = True
 USE_OR_TOOLS = True
 
-MAX_RUNNING_TIME = "605s"
+MAX_RUNNING_TIME = 605  # em segundos
 
 def compile_code(source_folder):
     print(f"Compiling code in {source_folder}...")
     # Change to the source folder
     os.chdir(source_folder)
 
+    # Use the full path to Maven
+    mvn_cmd = "C:\\apache-maven-3.9.9\\bin\\mvn.cmd"
+    
     # Run Maven compile
-    result = subprocess.run(["mvn", "clean", "package"], capture_output=True, text=True)
+    result = subprocess.run([mvn_cmd, "clean", "package"], capture_output=True, text=True)
 
     if result.returncode != 0:
         print("Maven compilation failed:")
@@ -28,6 +33,15 @@ def compile_code(source_folder):
     print("Maven compilation successful.")
     return True
 
+def run_with_timeout(cmd, timeout_sec):
+    process = Popen(cmd, stdout=PIPE, stderr=PIPE)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_sec)
+        return process.returncode, stdout, stderr
+    except subprocess.TimeoutExpired:
+        process.kill()
+        print(f"Process killed after {timeout_sec} seconds")
+        return -1, b"", b"Timeout"
 
 def run_benchmark(source_folder, input_folder, output_folder):
     # Change to the source folder
@@ -44,11 +58,6 @@ def run_benchmark(source_folder, input_folder, output_folder):
     elif USE_OR_TOOLS:
         libraries = OR_TOOLS_PATH
 
-    if platform.system() == "Darwin":
-        timeout_command = "gtimeout"
-    else:
-        timeout_command = "timeout"
-
     for filename in os.listdir(input_folder):
         if filename.endswith(".txt"):
             print(f"Running {filename}")
@@ -56,17 +65,16 @@ def run_benchmark(source_folder, input_folder, output_folder):
             output_file = os.path.join(output_folder, f"{os.path.splitext(filename)[0]}.txt")
             with open(output_file, "w") as out:
                 # Main Java command
-                cmd = [timeout_command, MAX_RUNNING_TIME, "java", "-Xmx16g", "-jar", "target/ChallengeSBPO2025-1.0.jar",
-                       input_file,
-                       output_file]
+                cmd = ["java", "-Xmx16g", "-jar", "target/ChallengeSBPO2025-1.0.jar",
+                      input_file,
+                      output_file]
                 if USE_CPLEX or USE_OR_TOOLS:
-                    cmd.insert(3, f"-Djava.library.path={libraries}")
+                    cmd.insert(1, f"-Djava.library.path={libraries}")
 
-                result = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
-                if result.returncode != 0:
+                returncode, stdout, stderr = run_with_timeout(cmd, MAX_RUNNING_TIME)
+                if returncode != 0:
                     print(f"Execution failed for {input_file}:")
-                    print(result.stderr)
-
+                    print(stderr.decode('utf-8', errors='ignore'))
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
