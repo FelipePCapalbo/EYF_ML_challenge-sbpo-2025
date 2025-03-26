@@ -1,22 +1,21 @@
-Instancia,Método de resolução,,,,
-,Modelo Exato,Greedy,Relax and Fix,GRASP (1 min),GRASP (10 min)
-1,,,,15,15
-2,,,,2,2
-3,,,,12,12
-4,,,,"3,5","3,5"
-5,,,,false,false
-6,,,,false,false
-7,,,,false,false
-8,,,,false,false
-9,,,,"4,19","4,17"
-10,,,,false,false
-11,,,,false,false
-12,,,,"11,25","11,25"
-13,,,,false,false
-14,,,,false,false
-15,,,,false,false
-16,,,,"11,25","12,04"
-17,,,,"6,73","6,21"
-18,,,,false,false
-19,,,,false,false
-20,,,,5,5
+Instância,Modelo Exato,Greedy,Greedy2,Relax and Fix,GRASP
+1,15,9,,15,15
+2,2,2,,2,2
+3,12,7,,12,12
+4,3.5,3.5,,3.5,3.5
+5,false,13.22,,false,false
+6,false,6.37,,false,false
+7,false,10.97,,false,false
+8,false,13.17,,false,false
+9,4.42,3.53,,4.19,4.17
+10,false,2.94,,false,false
+11,false,3.26,,false,false
+12,11.25,7.2,,11.25,11.25
+13,false,false,,false,false
+14,false,false,,false,false
+15,false,3.1,,false,false
+16,85,9.66,,11.25,12.04
+17,36.5,4.07,,6.73,6.21
+18,117.2,8.42,,false,false
+19,202,4.61,,false,false
+20,5,5.0,,5,5
