@@ -1,320 +1,298 @@
 package org.sbpo2025.challenge;
 
-import org.apache.commons.lang3.time.StopWatch;
-
+import com.google.ortools.Loader;
+import com.google.ortools.linearsolver.MPConstraint;
+import com.google.ortools.linearsolver.MPObjective;
+import com.google.ortools.linearsolver.MPSolver;
+import com.google.ortools.linearsolver.MPVariable;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.*;
+import java.util.stream.Collectors;
+
+// Structure to hold parsed input data
+class InputData {
+    int numOrders;
+    int numItems;
+    int numCorridors;
+    Map<Integer, Map<Integer, Integer>> orderItems; // orderId -> {itemId -> quantity}
+    Map<Integer, Map<Integer, Integer>> corridorItems; // corridorId -> {itemId -> quantity}
+    int lowerBoundItems;
+    int upperBoundItems;
+
+    // --- Precomputed data for efficiency ---
+    Set<Integer> allItems; // Set of unique item IDs
+    Map<Integer, Integer> totalItemsPerOrder; // orderId -> total quantity of items
+    Map<Integer, List<Integer>> itemToOrders; // itemId -> list of orderIds needing it
+    Map<Integer, List<Integer>> itemToCorridors; // itemId -> list of corridorIds having it
+    Map<Integer, List<Integer>> itemToCorridorsWithQuantity; // itemId -> {corridorId -> quantity}
+
+    public InputData(List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles, 
+                    int nItems, int waveSizeLB, int waveSizeUB) {
+        this.numOrders = orders.size();
+        this.numItems = nItems;
+        this.numCorridors = aisles.size();
+        this.lowerBoundItems = waveSizeLB;
+        this.upperBoundItems = waveSizeUB;
+        
+        // Initialize maps
+        this.orderItems = new HashMap<>();
+        this.corridorItems = new HashMap<>();
+        this.allItems = new HashSet<>();
+        this.totalItemsPerOrder = new HashMap<>();
+        this.itemToOrders = new HashMap<>();
+        this.itemToCorridors = new HashMap<>();
+        this.itemToCorridorsWithQuantity = new HashMap<>();
+
+        // Process orders
+        for (int i = 0; i < orders.size(); i++) {
+            Map<Integer, Integer> order = orders.get(i);
+            this.orderItems.put(i, order);
+            int totalItems = 0;
+            for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
+                int itemId = entry.getKey();
+                int quantity = entry.getValue();
+                allItems.add(itemId);
+                totalItems += quantity;
+                itemToOrders.computeIfAbsent(itemId, k -> new ArrayList<>()).add(i);
+            }
+            totalItemsPerOrder.put(i, totalItems);
+        }
+
+        // Process aisles
+        for (int i = 0; i < aisles.size(); i++) {
+            Map<Integer, Integer> aisle = aisles.get(i);
+            this.corridorItems.put(i, aisle);
+            for (Map.Entry<Integer, Integer> entry : aisle.entrySet()) {
+                int itemId = entry.getKey();
+                int quantity = entry.getValue();
+                itemToCorridors.computeIfAbsent(itemId, k -> new ArrayList<>()).add(i);
+            }
+        }
+    }
+}
+
+// Structure to hold the result from one ILP solve
+class ILPSolution {
+    MPSolver.ResultStatus status;
+    boolean isFeasible;
+    double objectiveValue;
+    Set<Integer> selectedOrders;
+    Set<Integer> selectedCorridors;
+    int totalItems;
+    int numCorridors;
+
+    public ILPSolution(MPSolver.ResultStatus status, double objectiveValue,
+                      Set<Integer> selectedOrders, Set<Integer> selectedCorridors,
+                      int totalItems, int numCorridors) {
+        this.status = status;
+        this.isFeasible = (status == MPSolver.ResultStatus.OPTIMAL ||
+                          status == MPSolver.ResultStatus.FEASIBLE);
+        this.objectiveValue = objectiveValue;
+        this.selectedOrders = selectedOrders;
+        this.selectedCorridors = selectedCorridors;
+        this.totalItems = totalItems;
+        this.numCorridors = numCorridors;
+    }
+
+    public ILPSolution(MPSolver.ResultStatus status) {
+        this.status = status;
+        this.isFeasible = false;
+        this.objectiveValue = Double.NEGATIVE_INFINITY;
+        this.selectedOrders = Collections.emptySet();
+        this.selectedCorridors = Collections.emptySet();
+        this.totalItems = 0;
+        this.numCorridors = 0;
+    }
+}
 
 public class ChallengeSolver {
-    private static final Logger LOGGER = Logger.getLogger(ChallengeSolver.class.getName());
-    private final long MAX_RUNTIME = 600000; // 10 minutos em milissegundos
-    protected List<Map<Integer, Integer>> orders; // Lista de pedidos (item -> quantidade)
-    protected List<Map<Integer, Integer>> aisles; // Lista de corredores (item -> quantidade)
-    protected int nItems; // Número total de itens distintos
-    protected int waveSizeLB; // Limite inferior de unidades por onda
-    protected int waveSizeUB; // Limite superior de unidades por onda
+    private static final int MAX_ITERATIONS = 100;
+    private static final double EPSILON = 1e-6;
+    private static final long TIME_LIMIT_SECONDS = 10 * 60 - 10;
 
-    public ChallengeSolver(List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles, 
-                           int nItems, int waveSizeLB, int waveSizeUB) {
-        this.orders = orders;
-        this.aisles = aisles;
-        this.nItems = nItems;
-        this.waveSizeLB = waveSizeLB;
-        this.waveSizeUB = waveSizeUB;
-        configureLogger();
+    private final InputData data;
+
+    public ChallengeSolver(List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles,
+                          int nItems, int waveSizeLB, int waveSizeUB) {
+        this.data = new InputData(orders, aisles, nItems, waveSizeLB, waveSizeUB);
     }
 
-    private void configureLogger() {
-        LOGGER.setLevel(Level.ALL);
-        ConsoleHandler handler = new ConsoleHandler();
-        handler.setLevel(Level.ALL);
-        handler.setFormatter(new SimpleFormatter() {
-            private static final String FORMAT = "[%1$tF %1$tT] [%2$-7s] %3$s %n";
-            @Override
-            public synchronized String format(LogRecord lr) {
-                return String.format(FORMAT,
-                        new Date(lr.getMillis()),
-                        lr.getLevel().getLocalizedName(),
-                        lr.getMessage());
-            }
-        });
-        LOGGER.addHandler(handler);
-        LOGGER.setUseParentHandlers(false);
+    static {
+        try {
+            Loader.loadNativeLibraries();
+        } catch (Exception e) {
+            System.err.println("Failed to load OR-Tools native libraries: " + e);
+        }
     }
 
-    /**
-     * Resolve o problema, utilizando o tempo limite para encontrar a melhor solução possível.
-     * @param stopWatch Cronômetro para controlar o tempo máximo de execução.
-     * @return A melhor solução encontrada (viável ou parcial).
-     */
-    public ChallengeSolution solve(StopWatch stopWatch) {
-        LOGGER.info("Iniciando processamento. LB=" + waveSizeLB + ", UB=" + waveSizeUB + ", nItems=" + nItems);
+    public ChallengeSolution solve(org.apache.commons.lang3.time.StopWatch stopWatch) {
+        long startTime = System.currentTimeMillis();
+        long timeLimitMillis = TimeUnit.SECONDS.toMillis(TIME_LIMIT_SECONDS);
 
-        ChallengeSolution bestSolution = null;
-        double bestObjective = Double.NEGATIVE_INFINITY;
-        List<List<Integer>> strategies = Arrays.asList(
-            orderByUnitsDescending(), 
-            orderByUnitsAscending(), 
-            orderRandomly()
-        );
-        int iteration = 0;
+        ChallengeSolution bestOverallSolution = null;
+        double bestOverallRatio = -1.0;
+        double currentLambda = 0.0;
 
-        while (getRemainingTime(stopWatch) > 0) {
-            iteration++;
-            LOGGER.info("Iteração " + iteration + " começando.");
+        System.out.println("Starting Dinkelbach Algorithm...");
 
-            // Escolhe uma estratégia de ordenação
-            List<Integer> orderIndices = strategies.get(iteration % strategies.size());
-            if (iteration % strategies.size() == 2) {
-                orderIndices = orderRandomly(); // Nova ordem aleatória a cada ciclo
+        for (int k = 0; k < MAX_ITERATIONS; k++) {
+            long currentTime = System.currentTimeMillis();
+            long elapsedTime = currentTime - startTime;
+            long remainingTimeMillis = timeLimitMillis - elapsedTime;
+
+            System.out.printf("Iteration %d, Lambda = %.5f, Time Remaining: %d ms%n",
+                            k + 1, currentLambda, remainingTimeMillis);
+
+            if (remainingTimeMillis <= 0) {
+                System.out.println("Time limit reached. Exiting Dinkelbach loop.");
+                break;
             }
 
-            // Constrói uma solução candidata
-            ChallengeSolution candidate = buildGreedySolution(orderIndices, stopWatch);
-            if (candidate != null) {
-                double objective = computeObjectiveFunction(candidate);
-                boolean feasible = isSolutionFeasible(candidate);
+            ILPSolution ilpResult = solveILP(data, currentLambda, remainingTimeMillis);
 
-                LOGGER.info("Solução candidata: Objetivo=" + objective + ", Viável=" + feasible);
-
-                if (feasible && objective > bestObjective) {
-                    bestSolution = candidate;
-                    bestObjective = objective;
-                    LOGGER.info("Nova melhor solução viável encontrada: Objetivo=" + bestObjective);
-                } else if (bestSolution == null && objective > bestObjective) {
-                    // Aceita uma solução parcial como melhor solução inicial
-                    bestSolution = candidate;
-                    bestObjective = objective;
-                    LOGGER.info("Melhor solução parcial atualizada: Objetivo=" + bestObjective);
+            if (!ilpResult.isFeasible) {
+                System.out.println("ILP solve was infeasible or failed. Status: " + ilpResult.status);
+                if (bestOverallSolution == null) {
+                    System.err.println("Infeasible on first useful iteration, problem might be infeasible.");
+                } else {
+                    System.out.println("Using best solution from previous iterations.");
                 }
+                break;
             }
 
-            // Pequena pausa para evitar uso excessivo de CPU
-            try {
-                Thread.sleep(10);
-            } catch (InterruptedException e) {
-                LOGGER.warning("Interrupção durante pausa: " + e.getMessage());
+            int currentTotalItems = ilpResult.totalItems;
+            int currentNumCorridors = ilpResult.numCorridors;
+            double Z = currentTotalItems - currentLambda * currentNumCorridors;
+
+            System.out.printf("  ILP Result: Z=%.5f, Items=%d, Corridors=%d%n", 
+                            Z, currentTotalItems, currentNumCorridors);
+
+            if (currentNumCorridors > 0) {
+                double currentRatio = (double) currentTotalItems / currentNumCorridors;
+                if (currentRatio > bestOverallRatio) {
+                    bestOverallRatio = currentRatio;
+                    bestOverallSolution = new ChallengeSolution(
+                            new HashSet<>(ilpResult.selectedOrders),
+                            new HashSet<>(ilpResult.selectedCorridors)
+                    );
+                    System.out.printf("  *** New best ratio found: %.5f ***%n", bestOverallRatio);
+                }
+            } else if (currentTotalItems > 0) {
+                System.err.println("Warning: Found solution with items but zero corridors.");
             }
-        }
 
-        if (bestSolution == null) {
-            LOGGER.warning("Nenhuma solução encontrada após " + iteration + " iterações.");
-            bestSolution = buildPartialSolution(orderByUnitsAscending(), stopWatch);
-            if (bestSolution != null) {
-                LOGGER.info("Solução parcial gerada como fallback: Pedidos=" + bestSolution.orders());
-            } else {
-                LOGGER.severe("Falha ao gerar mesmo uma solução parcial.");
-            }
-        } else {
-            LOGGER.info("Melhor solução final: Objetivo=" + bestObjective + 
-                        ", Pedidos=" + bestSolution.orders() + 
-                        ", Corredores=" + bestSolution.aisles());
-        }
-
-        return bestSolution;
-    }
-
-    /**
-     * Constrói uma solução gulosa com base na ordem dos pedidos.
-     */
-    private ChallengeSolution buildGreedySolution(List<Integer> orderIndices, StopWatch stopWatch) {
-        Set<Integer> selectedOrders = new HashSet<>();
-        Set<Integer> selectedAisles = new HashSet<>();
-        Map<Integer, Integer> availableUnits = new HashMap<>();
-        int currentTotalUnits = 0;
-
-        for (int orderIndex : orderIndices) {
-            if (getRemainingTime(stopWatch) <= 0) break;
-
-            Map<Integer, Integer> order = orders.get(orderIndex);
-            int orderTotalUnits = order.values().stream().mapToInt(Integer::intValue).sum();
-
-            if (currentTotalUnits + orderTotalUnits <= waveSizeUB && 
-                isOrderFeasible(order, selectedAisles, availableUnits, orderTotalUnits)) {
-                selectedOrders.add(orderIndex);
-                currentTotalUnits += orderTotalUnits;
-                LOGGER.fine("Pedido " + orderIndex + " adicionado. Total=" + currentTotalUnits);
-            }
-        }
-
-        return new ChallengeSolution(selectedOrders, selectedAisles);
-    }
-
-    /**
-     * Verifica se um pedido é viável e atualiza os corredores e unidades disponíveis.
-     */
-    private boolean isOrderFeasible(Map<Integer, Integer> order, Set<Integer> selectedAisles, 
-                                    Map<Integer, Integer> availableUnits, int orderTotalUnits) {
-        Map<Integer, Integer> tempUnits = new HashMap<>(availableUnits);
-        Set<Integer> additionalAisles = new HashSet<>();
-
-        for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
-            int item = entry.getKey();
-            int demand = entry.getValue();
-            int available = tempUnits.getOrDefault(item, 0);
-            if (demand > available) {
-                Set<Integer> aislesForItem = findMinimalAislesForOrder(order, selectedAisles);
-                if (aislesForItem == null) return false;
-                additionalAisles.addAll(aislesForItem);
-                for (int aisleIdx : aislesForItem) {
-                    Map<Integer, Integer> aisle = aisles.get(aisleIdx);
-                    for (Map.Entry<Integer, Integer> aisleEntry : aisle.entrySet()) {
-                        tempUnits.merge(aisleEntry.getKey(), aisleEntry.getValue(), Integer::sum);
+            if (Math.abs(Z) < EPSILON) {
+                System.out.println("Convergence reached (Z is close to 0).");
+                if (currentNumCorridors > 0) {
+                    double finalRatio = (double) currentTotalItems / currentNumCorridors;
+                    if (finalRatio > bestOverallRatio) {
+                        bestOverallSolution = new ChallengeSolution(
+                                new HashSet<>(ilpResult.selectedOrders),
+                                new HashSet<>(ilpResult.selectedCorridors)
+                        );
+                        bestOverallRatio = finalRatio;
                     }
                 }
-                if (tempUnits.getOrDefault(item, 0) < demand) return false;
+                break;
             }
-            tempUnits.put(item, tempUnits.get(item) - demand);
+
+            if (currentNumCorridors > 0) {
+                currentLambda = (double) currentTotalItems / currentNumCorridors;
+            } else {
+                System.err.println("Warning: Cannot update lambda, division by zero (0 corridors selected).");
+                break;
+            }
         }
 
-        selectedAisles.addAll(additionalAisles);
-        availableUnits.clear();
-        availableUnits.putAll(tempUnits);
-        return true;
+        if (bestOverallSolution == null) {
+            System.err.println("No feasible solution found within time limit or iterations.");
+            return new ChallengeSolution(new HashSet<>(), new HashSet<>());
+        }
+
+        System.out.printf("Finished Dinkelbach. Best Ratio Found: %.5f%n", bestOverallRatio);
+        return bestOverallSolution;
     }
 
-    /**
-     * Encontra corredores mínimos para suprir um pedido.
-     */
-    private Set<Integer> findMinimalAislesForOrder(Map<Integer, Integer> order, Set<Integer> currentAisles) {
-        Map<Integer, Integer> demand = new HashMap<>(order);
-        Set<Integer> selectedAisles = new HashSet<>();
-        List<Integer> availableAisles = new ArrayList<>();
-        for (int i = 0; i < aisles.size(); i++) {
-            if (!currentAisles.contains(i)) availableAisles.add(i);
+    private ILPSolution solveILP(InputData data, double lambda, long timeLimitMillis) {
+        MPSolver solver = MPSolver.createSolver("SCIP");
+        if (solver == null) {
+            System.err.println("Could not create SCIP solver.");
+            return new ILPSolution(MPSolver.ResultStatus.ABNORMAL);
+        }
+        solver.setTimeLimit(timeLimitMillis);
+
+        double infinity = MPSolver.infinity();
+
+        MPVariable[] x = new MPVariable[data.numOrders];
+        for (int o = 0; o < data.numOrders; ++o) {
+            x[o] = solver.makeBoolVar("x_" + o);
         }
 
-        while (!demand.isEmpty() && !availableAisles.isEmpty()) {
-            int bestAisle = -1;
-            int maxCoverage = -1;
-            for (int aisleIdx : availableAisles) {
-                int coverage = computeCoverage(aisles.get(aisleIdx), demand);
-                if (coverage > maxCoverage) {
-                    maxCoverage = coverage;
-                    bestAisle = aisleIdx;
+        MPVariable[] y = new MPVariable[data.numCorridors];
+        for (int a = 0; a < data.numCorridors; ++a) {
+            y[a] = solver.makeBoolVar("y_" + a);
+        }
+
+        MPObjective objective = solver.objective();
+        for (int o = 0; o < data.numOrders; ++o) {
+            objective.setCoefficient(x[o], data.totalItemsPerOrder.getOrDefault(o, 0));
+        }
+        for (int a = 0; a < data.numCorridors; ++a) {
+            objective.setCoefficient(y[a], -lambda);
+        }
+        objective.setMaximization();
+
+        MPConstraint totalItemsConstraint = solver.makeConstraint(data.lowerBoundItems, data.upperBoundItems, "TotalItems");
+        for (int o = 0; o < data.numOrders; ++o) {
+            totalItemsConstraint.setCoefficient(x[o], data.totalItemsPerOrder.getOrDefault(o, 0));
+        }
+
+        for (int i : data.allItems) {
+            MPConstraint stockConstraint = solver.makeConstraint(-infinity, 0.0, "Stock_" + i);
+
+            if (data.itemToOrders.containsKey(i)) {
+                for (int o : data.itemToOrders.get(i)) {
+                    int u_oi = data.orderItems.get(o).get(i);
+                    stockConstraint.setCoefficient(x[o], u_oi);
                 }
             }
-            if (maxCoverage <= 0) return null;
-            selectedAisles.add(bestAisle);
-            availableAisles.remove(Integer.valueOf(bestAisle));
-            Map<Integer, Integer> aisle = aisles.get(bestAisle);
-            for (Map.Entry<Integer, Integer> entry : aisle.entrySet()) {
-                int item = entry.getKey();
-                int supplied = entry.getValue();
-                if (demand.containsKey(item)) {
-                    int remaining = demand.get(item) - supplied;
-                    if (remaining <= 0) demand.remove(item);
-                    else demand.put(item, remaining);
-                }
-            }
-        }
-        return demand.isEmpty() ? selectedAisles : null;
-    }
 
-    private int computeCoverage(Map<Integer, Integer> aisle, Map<Integer, Integer> demand) {
-        int coverage = 0;
-        for (Map.Entry<Integer, Integer> entry : aisle.entrySet()) {
-            int item = entry.getKey();
-            int available = entry.getValue();
-            Integer needed = demand.get(item);
-            if (needed != null) coverage += Math.min(available, needed);
-        }
-        return coverage;
-    }
-
-    /**
-     * Constrói uma solução parcial como fallback.
-     */
-    private ChallengeSolution buildPartialSolution(List<Integer> orderIndices, StopWatch stopWatch) {
-        Set<Integer> selectedOrders = new HashSet<>();
-        Set<Integer> selectedAisles = new HashSet<>();
-        int currentTotalUnits = 0;
-
-        for (int orderIndex : orderIndices) {
-            if (getRemainingTime(stopWatch) <= 0) break;
-            Map<Integer, Integer> order = orders.get(orderIndex);
-            int orderTotalUnits = order.values().stream().mapToInt(Integer::intValue).sum();
-            if (currentTotalUnits + orderTotalUnits <= waveSizeUB) {
-                Set<Integer> tempAisles = findMinimalAislesForOrder(order, selectedAisles);
-                if (tempAisles != null) {
-                    selectedOrders.add(orderIndex);
-                    selectedAisles.addAll(tempAisles);
-                    currentTotalUnits += orderTotalUnits;
+            if (data.itemToCorridors.containsKey(i)) {
+                for (int a : data.itemToCorridors.get(i)) {
+                    if (data.corridorItems.containsKey(a) && data.corridorItems.get(a).containsKey(i)) {
+                        int u_ai = data.corridorItems.get(a).get(i);
+                        stockConstraint.setCoefficient(y[a], -u_ai);
+                    }
                 }
             }
         }
-        return selectedOrders.isEmpty() ? null : new ChallengeSolution(selectedOrders, selectedAisles);
-    }
 
-    private List<Integer> orderByUnitsDescending() {
-        List<Integer> indices = new ArrayList<>();
-        for (int i = 0; i < orders.size(); i++) indices.add(i);
-        indices.sort((a, b) -> Integer.compare(
-            orders.get(b).values().stream().mapToInt(Integer::intValue).sum(),
-            orders.get(a).values().stream().mapToInt(Integer::intValue).sum()
-        ));
-        return indices;
-    }
+        System.out.println("  Solving ILP...");
+        final MPSolver.ResultStatus resultStatus = solver.solve();
+        System.out.println("  ILP Solve finished with status: " + resultStatus);
 
-    private List<Integer> orderByUnitsAscending() {
-        List<Integer> indices = orderByUnitsDescending();
-        Collections.reverse(indices);
-        return indices;
-    }
+        if (resultStatus == MPSolver.ResultStatus.OPTIMAL || resultStatus == MPSolver.ResultStatus.FEASIBLE) {
+            Set<Integer> selectedOrders = new HashSet<>();
+            Set<Integer> selectedCorridors = new HashSet<>();
+            int totalItems = 0;
 
-    private List<Integer> orderRandomly() {
-        List<Integer> indices = new ArrayList<>();
-        for (int i = 0; i < orders.size(); i++) indices.add(i);
-        Collections.shuffle(indices, new Random());
-        return indices;
-    }
-
-    protected long getRemainingTime(StopWatch stopWatch) {
-        return Math.max(
-            TimeUnit.SECONDS.convert(MAX_RUNTIME - stopWatch.getTime(TimeUnit.MILLISECONDS), TimeUnit.MILLISECONDS),
-            0
-        );
-    }
-
-    protected boolean isSolutionFeasible(ChallengeSolution solution) {
-        Set<Integer> selectedOrders = solution.orders();
-        Set<Integer> visitedAisles = solution.aisles();
-        if (selectedOrders.isEmpty()) return false;
-
-        int[] totalUnitsPicked = new int[nItems];
-        int[] totalUnitsAvailable = new int[nItems];
-
-        for (int order : selectedOrders) {
-            for (Map.Entry<Integer, Integer> entry : orders.get(order).entrySet()) {
-                totalUnitsPicked[entry.getKey()] += entry.getValue();
+            for (int o = 0; o < data.numOrders; ++o) {
+                if (x[o].solutionValue() > 0.5) {
+                    selectedOrders.add(o);
+                    totalItems += data.totalItemsPerOrder.getOrDefault(o, 0);
+                }
             }
-        }
-
-        for (int aisle : visitedAisles) {
-            for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
-                totalUnitsAvailable[entry.getKey()] += entry.getValue();
+            for (int a = 0; a < data.numCorridors; ++a) {
+                if (y[a].solutionValue() > 0.5) {
+                    selectedCorridors.add(a);
+                }
             }
+
+            return new ILPSolution(resultStatus, solver.objective().value(),
+                                 selectedOrders, selectedCorridors,
+                                 totalItems, selectedCorridors.size());
+        } else {
+            return new ILPSolution(resultStatus);
         }
-
-        int totalUnits = Arrays.stream(totalUnitsPicked).sum();
-        if (totalUnits < waveSizeLB || totalUnits > waveSizeUB) return false;
-
-        for (int i = 0; i < nItems; i++) {
-            if (totalUnitsPicked[i] > totalUnitsAvailable[i]) return false;
-        }
-        return true;
-    }
-
-    protected double computeObjectiveFunction(ChallengeSolution solution) {
-        Set<Integer> selectedOrders = solution.orders();
-        Set<Integer> visitedAisles = solution.aisles();
-        if (selectedOrders.isEmpty() || visitedAisles.isEmpty()) return 0.0;
-
-        int totalUnitsPicked = 0;
-        for (int order : selectedOrders) {
-            totalUnitsPicked += orders.get(order).values().stream().mapToInt(Integer::intValue).sum();
-        }
-        return (double) totalUnitsPicked / visitedAisles.size();
     }
 }
