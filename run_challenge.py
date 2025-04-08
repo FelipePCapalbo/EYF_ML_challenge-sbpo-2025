@@ -20,7 +20,7 @@ def compile_code(source_folder):
     os.chdir(source_folder)
 
     # Use the full path to Maven
-    mvn_cmd = "C:\\apache-maven-3.9.9\\bin\\mvn.cmd"
+    mvn_cmd = "mvn"
     
     # Run Maven compile
     result = subprocess.run([mvn_cmd, "clean", "package"], capture_output=True, text=True)

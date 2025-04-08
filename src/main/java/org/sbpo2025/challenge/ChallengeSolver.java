@@ -1,10 +1,14 @@
 package org.sbpo2025.challenge;
 
 import com.google.ortools.Loader;
-import com.google.ortools.linearsolver.MPConstraint;
-import com.google.ortools.linearsolver.MPObjective;
+import com.google.ortools.sat.CpModel;
+import com.google.ortools.sat.CpSolver;
+import com.google.ortools.sat.CpSolverStatus;
+import com.google.ortools.sat.IntVar;
+import com.google.ortools.sat.LinearExpr;
 import com.google.ortools.linearsolver.MPSolver;
-import com.google.ortools.linearsolver.MPVariable;
+import org.apache.commons.lang3.time.StopWatch;
+
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -26,14 +30,14 @@ class InputData {
     Map<Integer, List<Integer>> itemToCorridors; // itemId -> list of corridorIds having it
     Map<Integer, List<Integer>> itemToCorridorsWithQuantity; // itemId -> {corridorId -> quantity}
 
-    public InputData(List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles, 
-                    int nItems, int waveSizeLB, int waveSizeUB) {
+    public InputData(List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles,
+                     int nItems, int waveSizeLB, int waveSizeUB) {
         this.numOrders = orders.size();
         this.numItems = nItems;
         this.numCorridors = aisles.size();
         this.lowerBoundItems = waveSizeLB;
         this.upperBoundItems = waveSizeUB;
-        
+
         // Initialize maps
         this.orderItems = new HashMap<>();
         this.corridorItems = new HashMap<>();
@@ -58,7 +62,7 @@ class InputData {
             totalItemsPerOrder.put(i, totalItems);
         }
 
-        // Process aisles
+        // Process aisles (corridors)
         for (int i = 0; i < aisles.size(); i++) {
             Map<Integer, Integer> aisle = aisles.get(i);
             this.corridorItems.put(i, aisle);
@@ -82,11 +86,11 @@ class ILPSolution {
     int numCorridors;
 
     public ILPSolution(MPSolver.ResultStatus status, double objectiveValue,
-                      Set<Integer> selectedOrders, Set<Integer> selectedCorridors,
-                      int totalItems, int numCorridors) {
+                       Set<Integer> selectedOrders, Set<Integer> selectedCorridors,
+                       int totalItems, int numCorridors) {
         this.status = status;
         this.isFeasible = (status == MPSolver.ResultStatus.OPTIMAL ||
-                          status == MPSolver.ResultStatus.FEASIBLE);
+                           status == MPSolver.ResultStatus.FEASIBLE);
         this.objectiveValue = objectiveValue;
         this.selectedOrders = selectedOrders;
         this.selectedCorridors = selectedCorridors;
@@ -113,7 +117,7 @@ public class ChallengeSolver {
     private final InputData data;
 
     public ChallengeSolver(List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles,
-                          int nItems, int waveSizeLB, int waveSizeUB) {
+                           int nItems, int waveSizeLB, int waveSizeUB) {
         this.data = new InputData(orders, aisles, nItems, waveSizeLB, waveSizeUB);
     }
 
@@ -141,7 +145,7 @@ public class ChallengeSolver {
             long remainingTimeMillis = timeLimitMillis - elapsedTime;
 
             System.out.printf("Iteration %d, Lambda = %.5f, Time Remaining: %d ms%n",
-                            k + 1, currentLambda, remainingTimeMillis);
+                    k + 1, currentLambda, remainingTimeMillis);
 
             if (remainingTimeMillis <= 0) {
                 System.out.println("Time limit reached. Exiting Dinkelbach loop.");
@@ -164,8 +168,8 @@ public class ChallengeSolver {
             int currentNumCorridors = ilpResult.numCorridors;
             double Z = currentTotalItems - currentLambda * currentNumCorridors;
 
-            System.out.printf("  ILP Result: Z=%.5f, Items=%d, Corridors=%d%n", 
-                            Z, currentTotalItems, currentNumCorridors);
+            System.out.printf("  ILP Result: Z=%.5f, Items=%d, Corridors=%d%n",
+                    Z, currentTotalItems, currentNumCorridors);
 
             if (currentNumCorridors > 0) {
                 double currentRatio = (double) currentTotalItems / currentNumCorridors;
@@ -213,84 +217,142 @@ public class ChallengeSolver {
         return bestOverallSolution;
     }
 
+    /**
+     * Resolve uma iteração do ILP usando CP-SAT com paralelização.
+     */
     private ILPSolution solveILP(InputData data, double lambda, long timeLimitMillis) {
-        MPSolver solver = MPSolver.createSolver("SCIP");
-        if (solver == null) {
-            System.err.println("Could not create SCIP solver.");
-            return new ILPSolution(MPSolver.ResultStatus.ABNORMAL);
-        }
-        solver.setTimeLimit(timeLimitMillis);
+        // Cria o modelo CP-SAT.
+        CpModel model = new CpModel();
 
-        double infinity = MPSolver.infinity();
-
-        MPVariable[] x = new MPVariable[data.numOrders];
+        // Cria as variáveis booleanas para os pedidos (x) e corredores (y).
+        IntVar[] x = new IntVar[data.numOrders];
         for (int o = 0; o < data.numOrders; ++o) {
-            x[o] = solver.makeBoolVar("x_" + o);
+            x[o] = model.newBoolVar("x_" + o);
         }
 
-        MPVariable[] y = new MPVariable[data.numCorridors];
+        IntVar[] y = new IntVar[data.numCorridors];
         for (int a = 0; a < data.numCorridors; ++a) {
-            y[a] = solver.makeBoolVar("y_" + a);
+            y[a] = model.newBoolVar("y_" + a);
         }
 
-        MPObjective objective = solver.objective();
+        // Adiciona a restrição de total de itens:
+        // lowerBoundItems <= Σ (totalItemsPerOrder[o] * x[o]) <= upperBoundItems.
+        int[] ordersQuantities = new int[data.numOrders];
         for (int o = 0; o < data.numOrders; ++o) {
-            objective.setCoefficient(x[o], data.totalItemsPerOrder.getOrDefault(o, 0));
+            ordersQuantities[o] = data.totalItemsPerOrder.getOrDefault(o, 0);
         }
-        for (int a = 0; a < data.numCorridors; ++a) {
-            objective.setCoefficient(y[a], -lambda);
+        // Monta a expressão: sum_{o}(x[o] * ordersQuantities[o])
+        // Utiliza explicitamente um array para a soma.
+        LinearExpr totalItemsExpr = LinearExpr.constant(0);
+        for (int o = 0; o < data.numOrders; o++) {
+            totalItemsExpr = LinearExpr.sum(new LinearExpr[] { totalItemsExpr, LinearExpr.term(x[o], ordersQuantities[o]) });
         }
-        objective.setMaximization();
+        model.addLinearConstraint(totalItemsExpr, data.lowerBoundItems, data.upperBoundItems);
 
-        MPConstraint totalItemsConstraint = solver.makeConstraint(data.lowerBoundItems, data.upperBoundItems, "TotalItems");
-        for (int o = 0; o < data.numOrders; ++o) {
-            totalItemsConstraint.setCoefficient(x[o], data.totalItemsPerOrder.getOrDefault(o, 0));
-        }
+        // Para cada item, impõe a restrição de estoque:
+        // Σ (u_oi * x[o]) - Σ (u_ai * y[a]) ≤ 0.
+        for (int item : data.allItems) {
+            List<IntVar> vars = new ArrayList<>();
+            List<Integer> coeffs = new ArrayList<>();
 
-        for (int i : data.allItems) {
-            MPConstraint stockConstraint = solver.makeConstraint(-infinity, 0.0, "Stock_" + i);
-
-            if (data.itemToOrders.containsKey(i)) {
-                for (int o : data.itemToOrders.get(i)) {
-                    int u_oi = data.orderItems.get(o).get(i);
-                    stockConstraint.setCoefficient(x[o], u_oi);
+            if (data.itemToOrders.containsKey(item)) {
+                for (int o : data.itemToOrders.get(item)) {
+                    int u_oi = data.orderItems.get(o).get(item);
+                    vars.add(x[o]);
+                    coeffs.add(u_oi);
                 }
             }
 
-            if (data.itemToCorridors.containsKey(i)) {
-                for (int a : data.itemToCorridors.get(i)) {
-                    if (data.corridorItems.containsKey(a) && data.corridorItems.get(a).containsKey(i)) {
-                        int u_ai = data.corridorItems.get(a).get(i);
-                        stockConstraint.setCoefficient(y[a], -u_ai);
+            if (data.itemToCorridors.containsKey(item)) {
+                for (int a : data.itemToCorridors.get(item)) {
+                    if (data.corridorItems.containsKey(a) && data.corridorItems.get(a).containsKey(item)) {
+                        int u_ai = data.corridorItems.get(a).get(item);
+                        vars.add(y[a]);
+                        coeffs.add(-u_ai);
                     }
                 }
             }
+
+            int size = vars.size();
+            if (size > 0) {
+                IntVar[] varArray = vars.toArray(new IntVar[size]);
+                int[] coeffsArray = new int[size];
+                for (int i = 0; i < size; i++) {
+                    coeffsArray[i] = coeffs.get(i);
+                }
+                // Monta a expressão: sum_{i}(varArray[i] * coeffsArray[i])
+                LinearExpr stockExpr = LinearExpr.constant(0);
+                for (int i = 0; i < size; i++) {
+                    stockExpr = LinearExpr.sum(new LinearExpr[] { stockExpr, LinearExpr.term(varArray[i], coeffsArray[i]) });
+                }
+                model.addLinearConstraint(stockExpr, Integer.MIN_VALUE, 0);
+            }
         }
 
-        System.out.println("  Solving ILP...");
-        final MPSolver.ResultStatus resultStatus = solver.solve();
-        System.out.println("  ILP Solve finished with status: " + resultStatus);
+        // Define a função objetivo:
+        // Maximizar Σ (totalItemsPerOrder[o] * x[o]) - lambda * Σ y[a]
+        // Como o CP-SAT exige coeficientes inteiros, usamos escalonamento.
+        int scale = 1000000;
+        int[] ordersCoeffs = new int[data.numOrders];
+        for (int o = 0; o < data.numOrders; ++o) {
+            ordersCoeffs[o] = data.totalItemsPerOrder.getOrDefault(o, 0) * scale;
+        }
+        int[] aislesCoeffs = new int[data.numCorridors];
+        int lambdaScaled = (int) Math.round(lambda * scale);
+        for (int a = 0; a < data.numCorridors; ++a) {
+            aislesCoeffs[a] = -lambdaScaled;
+        }
+        // Monta as expressões parciais do objetivo.
+        LinearExpr ordersExpr = LinearExpr.constant(0);
+        for (int o = 0; o < data.numOrders; o++) {
+            ordersExpr = LinearExpr.sum(new LinearExpr[] { ordersExpr, LinearExpr.term(x[o], ordersCoeffs[o]) });
+        }
+        LinearExpr aislesExpr = LinearExpr.constant(0);
+        for (int a = 0; a < data.numCorridors; a++) {
+            aislesExpr = LinearExpr.sum(new LinearExpr[] { aislesExpr, LinearExpr.term(y[a], aislesCoeffs[a]) });
+        }
+        LinearExpr objectiveExpr = LinearExpr.sum(new LinearExpr[] { ordersExpr, aislesExpr });
+        model.maximize(objectiveExpr);
 
-        if (resultStatus == MPSolver.ResultStatus.OPTIMAL || resultStatus == MPSolver.ResultStatus.FEASIBLE) {
+        // Cria o solver CP-SAT e configura o tempo limite e paralelização.
+        CpSolver solver = new CpSolver();
+        solver.getParameters().setMaxTimeInSeconds(timeLimitMillis / 1000.0);
+        int numThreads = Runtime.getRuntime().availableProcessors();
+        solver.getParameters().setNumSearchWorkers(numThreads);
+
+        // Resolve o modelo.
+        CpSolverStatus status = solver.solve(model);
+
+        // Mapeia o status do CP-SAT para MPSolver.ResultStatus para compatibilidade.
+        MPSolver.ResultStatus resultStatus;
+        if (status == CpSolverStatus.OPTIMAL) {
+            resultStatus = MPSolver.ResultStatus.OPTIMAL;
+        } else if (status == CpSolverStatus.FEASIBLE) {
+            resultStatus = MPSolver.ResultStatus.FEASIBLE;
+        } else {
+            resultStatus = MPSolver.ResultStatus.ABNORMAL;
+        }
+
+        if (status == CpSolverStatus.OPTIMAL || status == CpSolverStatus.FEASIBLE) {
             Set<Integer> selectedOrders = new HashSet<>();
             Set<Integer> selectedCorridors = new HashSet<>();
             int totalItems = 0;
 
-            for (int o = 0; o < data.numOrders; ++o) {
-                if (x[o].solutionValue() > 0.5) {
+            for (int o = 0; o < data.numOrders; o++) {
+                if (solver.value(x[o]) == 1) {
                     selectedOrders.add(o);
                     totalItems += data.totalItemsPerOrder.getOrDefault(o, 0);
                 }
             }
-            for (int a = 0; a < data.numCorridors; ++a) {
-                if (y[a].solutionValue() > 0.5) {
+            for (int a = 0; a < data.numCorridors; a++) {
+                if (solver.value(y[a]) == 1) {
                     selectedCorridors.add(a);
                 }
             }
-
-            return new ILPSolution(resultStatus, solver.objective().value(),
-                                 selectedOrders, selectedCorridors,
-                                 totalItems, selectedCorridors.size());
+            // Calcula o valor do objetivo não escalonado para exibição: totalItems - lambda * (#corridors)
+            double computedObjective = totalItems - lambda * selectedCorridors.size();
+            return new ILPSolution(resultStatus, computedObjective,
+                    selectedOrders, selectedCorridors, totalItems, selectedCorridors.size());
         } else {
             return new ILPSolution(resultStatus);
         }
