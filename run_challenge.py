@@ -21,7 +21,7 @@ def compile_code(source_folder):
 
     # Use the full path to Maven
     mvn_cmd = "mvn"
-    
+
     # Run Maven compile
     result = subprocess.run([mvn_cmd, "clean", "package"], capture_output=True, text=True)
 
@@ -60,9 +60,15 @@ def run_benchmark(source_folder, input_folder, output_folder):
 
     for filename in os.listdir(input_folder):
         if filename.endswith(".txt"):
-            print(f"Executando {filename}")
             input_file = os.path.join(input_folder, filename)
             output_file = os.path.join(output_folder, f"{os.path.splitext(filename)[0]}.txt")
+
+            # Verifica se a saída já existe
+            if os.path.exists(output_file):
+                print(f"{filename} já foi resolvido. Pulando...")
+                continue
+
+            print(f"Executando {filename}")
             with open(output_file, "w") as out:
                 # Main Java command
                 cmd = ["java", "-Xmx16g", "-jar", "target/ChallengeSBPO2025-1.0.jar",
