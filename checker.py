@@ -72,7 +72,11 @@ class WaveOrderPicking:
         num_visited_aisles = len(visited_aisles)
         return total_units_picked / num_visited_aisles
 
+<<<<<<< HEAD
 def check_all_files(input_dir="datasets/a", output_dir="output"):
+=======
+def check_all_files(input_dir="datasets/b", output_dir="output_b"):
+>>>>>>> development
     wave_order_picking = WaveOrderPicking()
     
     # Obter lista de arquivos de entrada e saída

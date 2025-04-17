@@ -6,11 +6,19 @@ import signal
 from subprocess import Popen, PIPE
 
 # Paths to the libraries
+<<<<<<< HEAD
 CPLEX_PATH = "C:\\Program Files\\IBM\\ILOG\\CPLEX_Studio2211\\cplex\\bin\\x64_win64"
 OR_TOOLS_PATH = "C:\\Program Files\\or-tools\\lib"
 
 USE_CPLEX = False  # Desativado por enquanto
 USE_OR_TOOLS = True  # Ativado para usar OR-Tools
+=======
+CPLEX_PATH = "/home/scarletflexsim/cplex/cplex/bin/x86-64_linux"
+OR_TOOLS_PATH = "C:\\Program Files\\or-tools\\lib"
+
+USE_CPLEX = True 
+USE_OR_TOOLS = False  
+>>>>>>> development
 
 MAX_RUNNING_TIME = 605  # em segundos
 
@@ -21,7 +29,11 @@ def compile_code(source_folder):
 
     # Use the full path to Maven
     mvn_cmd = "mvn"
+<<<<<<< HEAD
     
+=======
+
+>>>>>>> development
     # Run Maven compile
     result = subprocess.run([mvn_cmd, "clean", "package"], capture_output=True, text=True)
 
@@ -60,9 +72,21 @@ def run_benchmark(source_folder, input_folder, output_folder):
 
     for filename in os.listdir(input_folder):
         if filename.endswith(".txt"):
+<<<<<<< HEAD
             print(f"Executando {filename}")
             input_file = os.path.join(input_folder, filename)
             output_file = os.path.join(output_folder, f"{os.path.splitext(filename)[0]}.txt")
+=======
+            input_file = os.path.join(input_folder, filename)
+            output_file = os.path.join(output_folder, f"{os.path.splitext(filename)[0]}.txt")
+
+            # Verifica se a saída já existe
+            if os.path.exists(output_file):
+                print(f"{filename} já foi resolvido. Pulando...")
+                continue
+
+            print(f"Executando {filename}")
+>>>>>>> development
             with open(output_file, "w") as out:
                 # Main Java command
                 cmd = ["java", "-Xmx16g", "-jar", "target/ChallengeSBPO2025-1.0.jar",
