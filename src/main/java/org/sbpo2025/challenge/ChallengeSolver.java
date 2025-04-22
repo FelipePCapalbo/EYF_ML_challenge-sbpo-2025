@@ -10,13 +10,14 @@ import java.util.stream.IntStream;
 
 public class ChallengeSolver {
 
-    /* -------------------- parâmetros globais -------------------- */
-    private static final int  MAX_RESTARTS      = 8;
-    private static final long MAX_WALL_CLOCK_MS = 10L * 60_000L - 5_000L; // 10 min – 5 s
+    // ======================= PARAMETROS GLOBAIS =======================
+    private static final int  MAX_RESTARTS      = 8; // número máximo de reinícios da heurística multistart
+    private static final long MAX_WALL_CLOCK_MS = 10L * 60_000L - 5_000L; // limite total de tempo (10 min - 5 s)
 
-    private final ProblemData data;
-    private StopWatch timer;         // recebido do main
+    private final ProblemData data; // estrutura que armazena os dados do problema
+    private StopWatch timer;        // cronômetro externo recebido da main
 
+    // ======================= CONSTRUTOR =======================
     public ChallengeSolver(List<Map<Integer,Integer>> orders,
                            List<Map<Integer,Integer>> aisles,
                            int itemTypes,
@@ -25,17 +26,20 @@ public class ChallengeSolver {
         this.data = new ProblemData(orders, aisles, itemTypes, minWave, maxWave);
     }
 
-    /* ========================== solve() ========================= */
+    // ======================= METODO PRINCIPAL =======================
     public ChallengeSolution solve(StopWatch externalWatch) {
         this.timer = externalWatch;
 
-        double       bestRatio     = -1;
-        Set<Integer> bestOrders    = null;
-        Set<Integer> bestCorridors = null;
-        Random rng = new Random(2112);
+        double       bestRatio     = -1;    // melhor razão (itens / corredores)
+        Set<Integer> bestOrders    = null;  // melhor conjunto de pedidos
+        Set<Integer> bestCorridors = null;  // melhor conjunto de corredores
+        Random rng = new Random(2112);      // gerador de números aleatórios
 
+        // reinícios da heurística multistart
         for (int r = 0; r < MAX_RESTARTS && remainingTimeMs() > 2_000; r++) {
-            if (data.corridorCount <= 20) {                    // enumeração
+            
+            // abordagem por enumeração para problemas pequenos
+            if (data.corridorCount <= 20) {
                 for (int k = 1; k <= data.corridorCount && remainingTimeMs() > 2_000; k++) {
                     IloResult res = solveFixedCorridorCount(k, remainingTimeMs());
                     if (res.feasible && res.ratio > bestRatio) {
@@ -44,7 +48,8 @@ public class ChallengeSolver {
                         bestCorridors = res.chosenCorridors;
                     }
                 }
-            } else {                                           // Dinkelbach
+            } else {
+                // abordagem de Dinkelbach para problemas grandes
                 double lambda = rng.nextDouble() * data.maxWaveItems;
                 for (int it = 0; it < 50 && remainingTimeMs() > 2_000; it++) {
                     IloResult res = solveLambda(lambda, remainingTimeMs());
@@ -63,45 +68,54 @@ public class ChallengeSolver {
                 }
             }
         }
+
+        // retorno da melhor solução encontrada
         return (bestOrders == null)
                 ? new ChallengeSolution(Set.of(), Set.of())
                 : new ChallengeSolution(bestOrders, bestCorridors);
     }
 
-    /* ===================== modelos de otimização ==================== */
-
+    // ======================= MODELO COM k FIXO =======================
     private IloResult solveFixedCorridorCount(int k, long timeMs) {
         try (IloCplex c = new IloCplex()) {
             c.setOut(null);
             c.setParam(IloCplex.Param.TimeLimit, timeMs / 1000.0);
             setThreads(c);
 
+            // variáveis de decisão
             IloNumVar[] x = boolArray(c, data.orderCount,  "o");
             IloNumVar[] y = boolArray(c, data.corridorCount,"a");
 
+            // restrição de quantidade total de itens
             IloLinearNumExpr items = c.linearNumExpr();
             for (int o = 0; o < data.orderCount; o++)
                 items.addTerm(data.itemsPerOrder[o], x[o]);
             c.addGe(items, data.minWaveItems);
             c.addLe(items, data.maxWaveItems);
 
+            // restrições de capacidade
             addCapacityConstraints(c, x, y);
 
+            // restrição: número exato de corredores usados = k
             IloLinearNumExpr corrExpr = c.linearNumExpr();
             for (IloNumVar v : y) corrExpr.addTerm(1, v);
             c.addEq(corrExpr, k);
 
+            // objetivo: maximizar quantidade de itens
             c.addMaximize(items);
+
+            // solução inicial gulosa
             warmStart(c, x, y, k);
 
-            if (!c.solve() || !(c.getStatus() == IloCplex.Status.Optimal
-                             || c.getStatus() == IloCplex.Status.Feasible))
+            // resolução
+            if (!c.solve() || !(c.getStatus() == IloCplex.Status.Optimal || c.getStatus() == IloCplex.Status.Feasible))
                 return IloResult.infeasible();
 
             return extractResult(c, x, y, items);
         } catch (IloException ex) { return IloResult.infeasible(); }
     }
 
+    // ======================= MODELO COM LAMBDA =======================
     private IloResult solveLambda(double lambda, long timeMs) {
         try (IloCplex c = new IloCplex()) {
             c.setOut(null);
@@ -120,6 +134,7 @@ public class ChallengeSolver {
 
             addCapacityConstraints(c, x, y);
 
+            // objetivo modificado por Dinkelbach
             IloLinearNumExpr obj = c.linearNumExpr();
             for (int o = 0; o < data.orderCount;   o++) obj.addTerm(data.itemsPerOrder[o], x[o]);
             for (int a = 0; a < data.corridorCount; a++) obj.addTerm(-lambda, y[a]);
@@ -127,16 +142,14 @@ public class ChallengeSolver {
 
             warmStart(c, x, y, -1);
 
-            if (!c.solve() || !(c.getStatus() == IloCplex.Status.Optimal
-                             || c.getStatus() == IloCplex.Status.Feasible))
+            if (!c.solve() || !(c.getStatus() == IloCplex.Status.Optimal || c.getStatus() == IloCplex.Status.Feasible))
                 return IloResult.infeasible();
 
             return extractResult(c, x, y, items);
         } catch (IloException ex) { return IloResult.infeasible(); }
     }
 
-    /* -------------------------- utilitários ------------------------- */
-
+    // ======================= UTILITARIOS =======================
     private static IloNumVar[] boolArray(IloCplex c, int n, String p) throws IloException {
         IloNumVar[] v = new IloNumVar[n];
         for (int i = 0; i < n; i++) v[i] = c.boolVar(p + "_" + i);
@@ -167,7 +180,7 @@ public class ChallengeSolver {
         }
     }
 
-    /* warm‑start guloso */
+    // solução inicial gulosa
     private void warmStart(IloCplex c, IloNumVar[] x, IloNumVar[] y, int corrLimit) throws IloException {
         boolean[] oSel = new boolean[data.orderCount];
         boolean[] aSel = new boolean[data.corridorCount];
@@ -206,8 +219,7 @@ public class ChallengeSolver {
             items = newItems;
             extra.forEach(a -> aSel[a] = true);
 
-            if (items >= data.minWaveItems &&
-                    (corrLimit < 0 || corrNow + extra.size() == corrLimit))
+            if (items >= data.minWaveItems && (corrLimit < 0 || corrNow + extra.size() == corrLimit))
                 break;
         }
         if (items < data.minWaveItems) return;
@@ -222,8 +234,7 @@ public class ChallengeSolver {
         c.addMIPStart(vars, val, IloCplex.MIPStartEffort.Auto, "warm");
     }
 
-    private IloResult extractResult(IloCplex c, IloNumVar[] x, IloNumVar[] y,
-                                    IloLinearNumExpr itemsExpr) throws IloException {
+    private IloResult extractResult(IloCplex c, IloNumVar[] x, IloNumVar[] y, IloLinearNumExpr itemsExpr) throws IloException {
         Set<Integer> ord = new HashSet<>();
         Set<Integer> ais = new HashSet<>();
         for (int o = 0; o < x.length; o++) if (c.getValue(x[o]) > 0.5) ord.add(o);
@@ -239,7 +250,7 @@ public class ChallengeSolver {
         return Math.max(MAX_WALL_CLOCK_MS - timer.getTime(TimeUnit.MILLISECONDS), 0);
     }
 
-    /* ============================ dados ============================= */
+    // ======================= CLASSE DE DADOS =======================
     private static class ProblemData {
         final int orderCount, itemCount, corridorCount;
         final int minWaveItems, maxWaveItems;
@@ -271,7 +282,6 @@ public class ChallengeSolver {
                 corridorsContainingItem[i] = new ArrayList<>();
             }
 
-            /* pedidos */
             for (int o = 0; o < orderCount; o++) {
                 var map = orders.get(o);
                 orderDemand.put(o, map);
@@ -284,7 +294,6 @@ public class ChallengeSolver {
                 itemsPerOrder[o] = sum;
             }
 
-            /* corredores */
             for (int a = 0; a < corridorCount; a++) {
                 var map = aisles.get(a);
                 corridorSupply.put(a, map);
@@ -295,7 +304,6 @@ public class ChallengeSolver {
             pruneDominatedCorridors();
         }
 
-        /** remove corredores cujo suprimento é subconjunto de outro */
         private void pruneDominatedCorridors() {
             boolean[] dominated = new boolean[corridorCount];
 
@@ -326,7 +334,7 @@ public class ChallengeSolver {
         }
     }
 
-    /* --------------- contêiner de resultado interno ----------------- */
+    // ======================= RESULTADO =======================
     private record IloResult(boolean feasible,
                              double ratio,
                              int totalItems,
